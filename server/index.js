@@ -1,10 +1,14 @@
 import express from 'express';
 import axios from 'axios';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = process.env.PORT || 5000;
 
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '../dist')));
 
 app.get('/health', (_request, response) => {
   response.json({ ok: true, service: 'beatmaps-server' });
@@ -30,6 +34,10 @@ app.get('/api/spotify/audio-features/:trackId', async (request, response) => {
       detail: error.response?.data || error.message,
     });
   }
+});
+
+app.get('*', (_request, response) => {
+  response.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
 app.listen(port, () => {
