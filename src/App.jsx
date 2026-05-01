@@ -42,6 +42,80 @@ const SPOTIFY_SCOPES = [
   'user-read-currently-playing',
 ].join(' ');
 
+function base64UrlEncode(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+async function sha256(plain) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plain);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return hash;
+}
+
+function generateRandomString(length = 64) {
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  return Array.from(array, (byte) => ('0' + byte.toString(16)).slice(-2)).join('');
+}
+
+async function buildAuthUrl() {
+  const codeVerifier = generateRandomString(64);
+  const codeChallengeBuffer = await sha256(codeVerifier);
+  const codeChallenge = base64UrlEncode(codeChallengeBuffer);
+  const state = generateRandomString(16);
+
+  localStorage.setItem('spotify_code_verifier', codeVerifier);
+  localStorage.setItem('spotify_auth_state', state);
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: SPOTIFY_CLIENT_ID || '',
+    scope: SPOTIFY_SCOPES,
+    redirect_uri: REDIRECT_URI,
+    code_challenge_method: 'S256',
+    code_challenge: codeChallenge,
+    state,
+    show_dialog: 'true',
+  });
+
+  return `https://accounts.spotify.com/authorize?${params.toString()}`;
+}
+
+async function exchangeCodeForToken(code) {
+  const codeVerifier = localStorage.getItem('spotify_code_verifier');
+  if (!codeVerifier) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: REDIRECT_URI,
+    client_id: SPOTIFY_CLIENT_ID || '',
+    code_verifier: codeVerifier,
+  });
+
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  return {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+  };
+}
+
 const MAP_START = [20, 0];
 const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const ROUTE_COLORS = ['#1a73e8', '#188038', '#f9ab00'];
@@ -60,33 +134,31 @@ const emptyTrack = {
   tempo: null,
 };
 
-function buildAuthUrl() {
-  const params = new URLSearchParams({
-    response_type: 'token',
-    client_id: SPOTIFY_CLIENT_ID || '',
-    scope: SPOTIFY_SCOPES,
-    redirect_uri: REDIRECT_URI,
-    show_dialog: 'true',
-  });
-
-  return `https://accounts.spotify.com/authorize?${params.toString()}`;
+function readTokenFromHash() {
+  return null;
 }
 
-function readTokenFromHash() {
-  const hash = window.location.hash.replace(/^#/, '');
-  const params = new URLSearchParams(hash);
-  const token = params.get('access_token');
-  const expiresIn = Number(params.get('expires_in') || 0);
+async function processSpotifyRedirect() {
+  const query = new URLSearchParams(window.location.search);
+  const code = query.get('code');
+  const state = query.get('state');
 
-  if (!token) {
+  if (!code) {
+    return null;
+  }
+
+  const storedState = localStorage.getItem('spotify_auth_state');
+  if (!storedState || storedState !== state) {
+    return null;
+  }
+
+  const tokenPayload = await exchangeCodeForToken(code);
+  if (!tokenPayload) {
     return null;
   }
 
   window.history.replaceState(null, document.title, window.location.pathname);
-  return {
-    token,
-    expiresAt: Date.now() + expiresIn * 1000,
-  };
+  return tokenPayload;
 }
 
 function formatDistance(meters = 0) {
