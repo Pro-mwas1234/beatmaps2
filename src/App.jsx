@@ -818,12 +818,14 @@ function App() {
     }
   }, [spotifyToken, tempo]);
 
-  const connectSpotify = () => {
+  const connectSpotify = async () => {
     if (!clientConfigured) {
       setStatus('Add VITE_SPOTIFY_CLIENT_ID to .env first');
       return;
     }
-    window.location.href = buildAuthUrl();
+
+    const authUrl = await buildAuthUrl();
+    window.location.href = authUrl;
   };
 
   const togglePlayback = async () => {
@@ -859,30 +861,34 @@ function App() {
   };
 
   useEffect(() => {
-    const tokenPayload = readTokenFromHash();
-    if (tokenPayload) {
-      localStorage.setItem('beatmaps_spotify_token', JSON.stringify(tokenPayload));
-      setSpotifyToken(tokenPayload.token);
-      setStatus('Spotify connected');
-      return;
-    }
+    async function restoreSpotifySession() {
+      const tokenPayload = await processSpotifyRedirect();
+      if (tokenPayload) {
+        localStorage.setItem('beatmaps_spotify_token', JSON.stringify(tokenPayload));
+        setSpotifyToken(tokenPayload.token);
+        setStatus('Spotify connected');
+        return;
+      }
 
-    const stored = localStorage.getItem('beatmaps_spotify_token');
-    if (!stored) {
-      return;
-    }
+      const stored = localStorage.getItem('beatmaps_spotify_token');
+      if (!stored) {
+        return;
+      }
 
-    try {
-      const payload = JSON.parse(stored);
-      if (payload.expiresAt > Date.now()) {
-        setSpotifyToken(payload.token);
-        setStatus('Spotify session restored');
-      } else {
+      try {
+        const payload = JSON.parse(stored);
+        if (payload.expiresAt > Date.now()) {
+          setSpotifyToken(payload.token);
+          setStatus('Spotify session restored');
+        } else {
+          localStorage.removeItem('beatmaps_spotify_token');
+        }
+      } catch {
         localStorage.removeItem('beatmaps_spotify_token');
       }
-    } catch {
-      localStorage.removeItem('beatmaps_spotify_token');
     }
+
+    restoreSpotifySession();
   }, []);
 
   useEffect(() => {
