@@ -309,6 +309,20 @@ function boundsFromCoords(coords) {
   return bounds;
 }
 
+function getRouteBearing(coords) {
+  if (!coords || coords.length < 2) {
+    return null;
+  }
+
+  const [[lat1, lon1], [lat2, lon2]] = coords;
+  const y = Math.sin((lon2 - lon1) * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180));
+  const x =
+    Math.cos(lat1 * (Math.PI / 180)) * Math.sin(lat2 * (Math.PI / 180)) -
+    Math.sin(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.cos((lon2 - lon1) * (Math.PI / 180));
+  const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+}
+
 function makeMarker(className) {
   const element = document.createElement('div');
   element.className = `route-pin ${className}`;
@@ -357,11 +371,18 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [beatSync, setBeatSync] = useState(false);
   const [tempo, setTempo] = useState(null);
+  const [manualTempo, setManualTempo] = useState(112);
   const [beatCount, setBeatCount] = useState(0);
   const [bars, setBars] = useState(() => Array(18).fill(16));
   const [track, setTrack] = useState(emptyTrack);
   const [status, setStatus] = useState('Use GPS and search for a destination');
   const [activeStep, setActiveStep] = useState(0);
+  const [localAudioFiles, setLocalAudioFiles] = useState([]);
+  const [localTrackIndex, setLocalTrackIndex] = useState(0);
+  const [localAudioFolder, setLocalAudioFolder] = useState('');
+  const localAudioRef = useRef(null);
+  const localFolderInputRef = useRef(null);
+  const [localAudioError, setLocalAudioError] = useState('');
   const [currentPosition, setCurrentPosition] = useState(null);
   const [locationStatus, setLocationStatus] = useState('GPS idle');
   const [destination, setDestination] = useState(null);
@@ -381,11 +402,196 @@ function App() {
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
   const [voiceRate, setVoiceRate] = useState(0.98);
 
-  const effectiveTempo = tempo || 112;
+  const effectiveTempo = tempo || manualTempo;
   const secondsPerBeat = useMemo(() => 60 / effectiveTempo, [effectiveTempo]);
   const clientConfigured = Boolean(SPOTIFY_CLIENT_ID);
   const currentStep = routeSteps[Math.min(activeStep, routeSteps.length - 1)];
   const upcomingStep = routeSteps[Math.min(activeStep + 1, routeSteps.length - 1)] || currentStep;
+
+  const localTrack = localAudioFiles[localTrackIndex] || null;
+  const hasLocalTracks = localAudioFiles.length > 0;
+
+  const getAudioFileMatches = (name) => /\.(mp3|m4a|ogg|wav|aac|flac|webm)$/i.test(name);
+
+  const revokeLocalAudioUrls = (files) => {
+    files.forEach((item) => {
+      if (item?.url) {
+        URL.revokeObjectURL(item.url);
+      }
+    });
+  };
+
+  const setLocalAudio = (files, folderName) => {
+    revokeLocalAudioUrls(localAudioFiles);
+    setLocalAudioFiles(files);
+    setLocalTrackIndex(0);
+    setLocalAudioFolder(folderName || 'Local music');
+    setTempo(null);
+    setIsPlaying(false);
+    if (files.length) {
+      setStatus(`Loaded ${files.length} local tracks from ${folderName || 'folder'}`);
+      setTrack({
+        name: files[0].name,
+        artist: 'Local music',
+        albumArt: '/beat.svg',
+        id: `local-${0}`,
+        tempo: null,
+      });
+    } else {
+      setStatus('No audio files found in selected folder');
+    }
+  };
+
+  const loadLocalMusicFolder = async () => {
+    if (window.showDirectoryPicker) {
+      try {
+        const directoryHandle = await window.showDirectoryPicker();
+        const files = [];
+
+        const readDirectory = async (handle) => {
+          for await (const entry of handle.values()) {
+            if (entry.kind === 'file' && getAudioFileMatches(entry.name)) {
+              const file = await entry.getFile();
+              files.push({ name: entry.name, url: URL.createObjectURL(file), file });
+            }
+            if (entry.kind === 'directory') {
+              await readDirectory(entry);
+            }
+          }
+        };
+
+        await readDirectory(directoryHandle);
+        setLocalAudio(files, directoryHandle.name);
+      } catch (error) {
+        setStatus('Local folder access cancelled or failed');
+        setLocalAudioError(error?.message || 'Directory selection failed');
+      }
+      return;
+    }
+
+    if (localFolderInputRef.current) {
+      localFolderInputRef.current.click();
+    }
+  };
+
+  const handleLocalFolderFiles = async (event) => {
+    const rawFiles = Array.from(event.target.files || []);
+    const files = rawFiles
+      .filter((file) => getAudioFileMatches(file.name))
+      .map((file) => ({ name: file.name, url: URL.createObjectURL(file), file }));
+
+    setLocalAudio(files, 'selected files');
+    event.target.value = null;
+  };
+
+  const ensureLocalAudioRef = () => {
+    if (!localAudioRef.current) {
+      localAudioRef.current = new Audio();
+      localAudioRef.current.addEventListener('ended', () => setIsPlaying(false));
+    }
+    return localAudioRef.current;
+  };
+
+  const playLocalTrack = async () => {
+    if (!hasLocalTracks) {
+      setStatus('Load a local music folder first');
+      return;
+    }
+
+    const audio = ensureLocalAudioRef();
+    const track = localTrack;
+    if (!track) {
+      setStatus('No local track selected');
+      return;
+    }
+
+    if (audio.src !== track.url) {
+      audio.src = track.url;
+      audio.load();
+    }
+
+    try {
+      await audio.play();
+      setIsPlaying(true);
+      setTrack({ name: track.name, artist: 'Local music', albumArt: '/beat.svg', id: `local-${localTrackIndex}`, tempo });
+      setStatus(`Playing ${track.name}`);
+    } catch (error) {
+      setStatus('Unable to play local audio; check browser permissions');
+      setLocalAudioError(error?.message || 'Playback failed');
+    }
+  };
+
+  const pauseLocalTrack = () => {
+    const audio = localAudioRef.current;
+    if (!audio) {
+      return;
+    }
+    audio.pause();
+    setIsPlaying(false);
+    setStatus('Local playback paused');
+  };
+
+  const advanceLocalTrack = async (index) => {
+    if (!hasLocalTracks) {
+      return;
+    }
+
+    const nextIndex = ((index % localAudioFiles.length) + localAudioFiles.length) % localAudioFiles.length;
+    const nextTrack = localAudioFiles[nextIndex];
+    setLocalTrackIndex(nextIndex);
+    setTrack({ name: nextTrack.name, artist: 'Local music', albumArt: '/beat.svg', id: `local-${nextIndex}`, tempo });
+
+    const audio = ensureLocalAudioRef();
+    if (isPlaying) {
+      if (audio.src !== nextTrack.url) {
+        audio.src = nextTrack.url;
+        audio.load();
+      }
+      try {
+        await audio.play();
+        setStatus(`Playing ${nextTrack.name}`);
+      } catch (error) {
+        setStatus('Could not switch local track');
+        setLocalAudioError(error?.message || 'Playback failed');
+      }
+    }
+  };
+
+  const duckVolume = useCallback(async () => {
+    if (!duckingEnabled || !playerRef.current?.setVolume) {
+      return;
+    }
+
+    window.clearTimeout(volumeRestoreTimer.current);
+    await playerRef.current.setVolume(0.24);
+    volumeRestoreTimer.current = window.setTimeout(() => {
+      playerRef.current?.setVolume?.(0.75);
+    }, 3400);
+  }, [duckingEnabled]);
+
+  const speakOnBeat = useCallback(async (message) => {
+    if (!('speechSynthesis' in window)) {
+      return;
+    }
+
+    await duckVolume();
+    const utterance = new SpeechSynthesisUtterance(message);
+    const selectedVoice = voices.find((voice) => voice.name === selectedVoiceName);
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+    utterance.rate = voiceRate;
+    utterance.pitch = 1;
+    utterance.volume = 0.9;
+    utterance.onend = () => {
+      window.clearTimeout(volumeRestoreTimer.current);
+      if (duckingEnabled) {
+        playerRef.current?.setVolume?.(0.75);
+      }
+    };
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }, [duckVolume, duckingEnabled, selectedVoiceName, voiceRate, voices]);
 
   const enterNavigationMode = useCallback(() => {
     if (!routeCoordsRef.current.length) {
@@ -397,24 +603,31 @@ function App() {
     setStatus('Navigation started');
 
     const anchor = currentPosition || routeCoordsRef.current[0];
+    const routeBearing = getRouteBearing(routeCoordsRef.current) ?? map.current?.getBearing() ?? -18;
+
     map.current?.flyTo({
       center: lngLat(anchor),
       zoom: 17,
-      pitch: 68,
-      bearing: -18,
-      offset: [0, 170],
+      pitch: 55,
+      bearing: routeBearing,
+      offset: [0, 120],
       duration: 900,
     });
-  }, [currentPosition]);
+
+    if (routeSteps.length) {
+      speakOnBeat(voiceInstruction(currentStep || routeSteps[0]));
+    }
+  }, [currentPosition, currentStep, routeSteps, speakOnBeat]);
 
   const exitNavigationMode = useCallback(() => {
     setIsNavigating(false);
     setStatus('Navigation stopped');
     if (routes[selectedRouteIndex]) {
+      const routeBearing = getRouteBearing(routes[selectedRouteIndex].coords) ?? -18;
       map.current?.fitBounds(boundsFromCoords(routes[selectedRouteIndex].coords), {
         padding: { top: 140, right: 470, bottom: 80, left: 70 },
-        pitch: 58,
-        bearing: -18,
+        pitch: 55,
+        bearing: routeBearing,
         duration: 700,
       });
     }
@@ -464,42 +677,6 @@ function App() {
     drawRoutes(nextRoutes, index);
     setStatus(`${route.label} selected`);
   }, [drawRoutes, routes]);
-
-  const duckVolume = useCallback(async () => {
-    if (!duckingEnabled || !playerRef.current?.setVolume) {
-      return;
-    }
-
-    window.clearTimeout(volumeRestoreTimer.current);
-    await playerRef.current.setVolume(0.24);
-    volumeRestoreTimer.current = window.setTimeout(() => {
-      playerRef.current?.setVolume?.(0.75);
-    }, 3400);
-  }, [duckingEnabled]);
-
-  const speakOnBeat = useCallback(async (message) => {
-    if (!('speechSynthesis' in window)) {
-      return;
-    }
-
-    await duckVolume();
-    const utterance = new SpeechSynthesisUtterance(message);
-    const selectedVoice = voices.find((voice) => voice.name === selectedVoiceName);
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-    }
-    utterance.rate = voiceRate;
-    utterance.pitch = 1;
-    utterance.volume = 0.9;
-    utterance.onend = () => {
-      window.clearTimeout(volumeRestoreTimer.current);
-      if (duckingEnabled) {
-        playerRef.current?.setVolume?.(0.75);
-      }
-    };
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }, [duckVolume, duckingEnabled, selectedVoiceName, voiceRate, voices]);
 
   const calculateRoute = useCallback(async (origin = currentPosition, target = destination) => {
     if (!origin || !target) {
@@ -734,6 +911,24 @@ function App() {
   }, [currentPosition, destination, nearbyCategory]);
 
   const fetchCurrentTrack = useCallback(async () => {
+    if (hasLocalTracks) {
+      const current = localTrack;
+      if (!current) {
+        setStatus('Local audio loaded but no track selected');
+        return;
+      }
+
+      setTrack({
+        name: current.name,
+        artist: 'Local music',
+        albumArt: '/beat.svg',
+        id: `local-${localTrackIndex}`,
+        tempo,
+      });
+      setStatus(`Loaded local track ${current.name}`);
+      return;
+    }
+
     if (!spotifyToken) {
       setStatus('Connect Spotify to sync tempo');
       return;
@@ -782,9 +977,15 @@ function App() {
     setTempo(roundedTempo);
     setTrack((currentTrack) => ({ ...currentTrack, tempo: roundedTempo }));
     setStatus(`Locked to ${roundedTempo} BPM`);
-  }, [effectiveTempo, spotifyToken, tempo]);
+  }, [effectiveTempo, spotifyToken, tempo, hasLocalTracks, localTrack, localTrackIndex]);
 
   const refreshPlaylistSuggestions = useCallback(async () => {
+    if (hasLocalTracks) {
+      setPlaylistSuggestions([]);
+      setStatus('Playlist suggestions require Spotify when using local music');
+      return;
+    }
+
     if (!spotifyToken || !tempo) {
       setPlaylistSuggestions([]);
       setStatus('Connect Spotify and load a track first');
@@ -829,6 +1030,15 @@ function App() {
   };
 
   const togglePlayback = async () => {
+    if (hasLocalTracks) {
+      if (isPlaying) {
+        pauseLocalTrack();
+        return;
+      }
+      await playLocalTrack();
+      return;
+    }
+
     if (!spotifyToken || !deviceId) {
       setStatus('Connect Spotify playback first');
       return;
@@ -842,7 +1052,7 @@ function App() {
     setIsPlaying((playing) => !playing);
   };
 
-  const toggleBeatSync = async () => {
+  async function toggleBeatSync() {
     if (!routeSteps.length) {
       setStatus('Calculate a route before beat sync');
       return;
@@ -858,7 +1068,7 @@ function App() {
     }
 
     setBeatSync((enabled) => !enabled);
-  };
+  }
 
   useEffect(() => {
     async function restoreSpotifySession() {
@@ -1232,11 +1442,31 @@ function App() {
         <section className="controls">
           <button className="primary-button" onClick={connectSpotify}>
             <BluetoothConnected size={22} />
-            <span>{spotifyToken ? 'Spotify Connected' : 'Connect Spotify'}</span>
+            <span>{spotifyToken ? 'Spotify Connected' : hasLocalTracks ? 'Spotify (optional)' : 'Connect Spotify'}</span>
           </button>
+          <button className="primary-button" onClick={loadLocalMusicFolder}>
+            <Music2 size={22} />
+            <span>{hasLocalTracks ? 'Load more music' : 'Load music'}</span>
+          </button>
+          <input
+            ref={localFolderInputRef}
+            type="file"
+            webkitdirectory=""
+            directory=""
+            multiple
+            accept="audio/*"
+            style={{ display: 'none' }}
+            onChange={handleLocalFolderFiles}
+          />
           <div className="button-grid">
+            <button className="icon-button" onClick={() => advanceLocalTrack(localTrackIndex - 1)} title="Previous track" disabled={!hasLocalTracks}>
+              <ArrowLeft size={26} />
+            </button>
             <button className="icon-button" onClick={togglePlayback} title={isPlaying ? 'Pause' : 'Play'}>
               {isPlaying ? <Pause size={26} /> : <Play size={26} />}
+            </button>
+            <button className="icon-button" onClick={() => advanceLocalTrack(localTrackIndex + 1)} title="Next track" disabled={!hasLocalTracks}>
+              <ArrowRight size={26} />
             </button>
             <button className={`icon-button ${beatSync ? 'active' : ''}`} onClick={toggleBeatSync} title="Beat sync">
               <Radio size={26} />
@@ -1258,6 +1488,9 @@ function App() {
               <DownloadCloud size={26} />
             </button>
           </div>
+          {localAudioError && (
+            <div className="status-note error-note">{localAudioError}</div>
+          )}
         </section>
 
         <section className="status-strip">
@@ -1285,6 +1518,26 @@ function App() {
             <span className="eyebrow">Music sync</span>
             <h2>{track.name}</h2>
             <p>{tempo ? `${track.artist} · ${tempo} BPM` : track.artist}</p>
+            {hasLocalTracks && (
+              <small className="local-audio-summary">
+                {localAudioFolder} · {localAudioFiles.length} track{localAudioFiles.length === 1 ? '' : 's'}
+              </small>
+            )}
+            {hasLocalTracks && !tempo && (
+              <div className="manual-bpm-control">
+                <label>
+                  Manual tempo: {manualTempo} BPM
+                  <input
+                    type="range"
+                    min="70"
+                    max="180"
+                    step="1"
+                    value={manualTempo}
+                    onChange={(event) => setManualTempo(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            )}
           </div>
         </section>
 

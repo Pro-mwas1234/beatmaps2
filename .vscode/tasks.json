@@ -1,0 +1,53 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build BeatMaps",
+			"type": "shell",
+			"command": "npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$eslint-stylish"
+			]
+		},
+		{
+			"label": "Build BeatMaps",
+			"type": "shell",
+			"command": "npm.cmd run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$eslint-stylish"
+			]
+		},
+		{
+			"label": "Build BeatMaps CMD",
+			"type": "shell",
+			"command": "cmd.exe /c \"npm.cmd run build\"",
+			"isBackground": false,
+			"problemMatcher": [
+				"$eslint-stylish"
+			]
+		},
+		{
+			"label": "Inspect Build Line",
+			"type": "shell",
+			"command": "cmd.exe /c \"python - <<'PY'\nfrom pathlib import Path\npath = Path(r'c:/Users/augus/Documents/Codex/2026-04-30/beatmaps-rhythmic-gps-navigation-navigate-to/dist/assets/index-cDCn5JgA.js')\nlines = path.read_text(encoding='utf-8', errors='replace').splitlines()\nfor i in range(990, 1005):\n    if i < len(lines):\n        print(f'{i+1}: {lines[i]}')\nPY\"",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect Build Line",
+			"type": "shell",
+			"command": "cmd.exe /c \"python -c \"from pathlib import Path; path=Path('c:/Users/augus/Documents/Codex/2026-04-30/beatmaps-rhythmic-gps-navigation-navigate-to/dist/assets/index-cDCn5JgA.js'); lines=path.read_text(encoding='utf-8', errors='replace').splitlines(); print('\\n'.join(f'{i+1}: {lines[i]}' for i in range(990,1005) if i < len(lines)))\"\"",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect Build Line",
+			"type": "shell",
+			"command": "cmd.exe /c \"python -c \"from pathlib import Path; path=Path('c:/Users/augus/Documents/Codex/2026-04-30/beatmaps-rhythmic-gps-navigation-navigate-to/dist/assets/index-cDCn5JgA.js'); lines=path.read_text(encoding='utf-8', errors='replace').splitlines(); print('\\n'.join(f'{i+1}: {lines[i]}' for i in range(990,1005) if i < len(lines)))\"\"",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}
